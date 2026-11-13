@@ -26,6 +26,7 @@ let pins = [], activePin = null, pinGroup = null;
 let pinVisibility = {offscreen:0,unplaced:0};
 let recordState = { revision: null, status: 'ready' };
 let viewMode = 'library', comparisonMode = 'diff', sceneTicket = 0;
+let libraryProjection = '3D';
 let towns = new Map(), comparisons = new Map();
 let journeyTimer;
 let mapLoadStatus='loading',pendingSearchRecord=null;
@@ -47,7 +48,7 @@ const sheet = byId('record-sheet');
 function element(tag, className = '', text = '') { const node = document.createElement(tag); node.className = className; node.textContent = text; return node; }
 function notify(text) { clearTimeout(noticeTimer); byId('notice').textContent = text || ''; byId('notice').hidden = !text; if (text) noticeTimer = setTimeout(() => { byId('notice').hidden = true; }, 6500); }
 function frame() { return model.frames[frameIndex]; }
-function town(index = frameIndex) { if(index < 0)return null; const key=`${viewMode}:${index}`; if(!towns.has(key))towns.set(key,viewMode==='library'?buildRevisionLibrary(model.frames[index]):buildRevisionTown(model.frames[index]));return towns.get(key); }
+function town(index = frameIndex) { if(index < 0)return null; const key=`${viewMode}:${index}`; if(!towns.has(key))towns.set(key,viewMode.startsWith('library')?buildRevisionLibrary(model.frames[index]):buildRevisionTown(model.frames[index]));return towns.get(key); }
 function comparison() { if(!comparisons.has(frameIndex))comparisons.set(frameIndex,compareRevisionTrees(model.frames[frameIndex-1] || null,frame()));return comparisons.get(frameIndex); }
 function comparisonStatus() { return frameIndex === 0 ? 'unknown' : usesCurrentInventory() ? comparison().status : frame().changes.status; }
 function visibleMap() { return usesCurrentInventory() ? town(comparisonMode === 'before' && frameIndex > 0 ? frameIndex-1 : frameIndex) : model.map; }
@@ -273,7 +274,7 @@ function renderFrame() {
 function renderHistoryData() {
   const current=frame();
   const data=byId('history-data');data.replaceChildren();
-  const mapDetails=usesCurrentInventory()?[['表示地図',visibleMap().id],['表現',viewMode==='library'?'1ファイル1冊 · 塔は蔵書数/種類':'現ファイル数 · 対数上限付き'],['色','所属分類'],['差分','前の表示版との2inventory比較']]:[['地図',current.mapSnapshot.mapDigest],['活動色','内容編集 0 / 2 / 8回以上'],['集計','第1親差分 · 初出除外 · 配下平均']];
+  const mapDetails=usesCurrentInventory()?[['表示地図',visibleMap().id],['表現',viewMode.startsWith('library')?'1ファイル1冊 · 塔は蔵書数/種類':'現ファイル数 · 対数上限付き'],['色','所属分類'],['差分','前の表示版との2inventory比較']]:[['地図',current.mapSnapshot.mapDigest],['活動色','内容編集 0 / 2 / 8回以上'],['集計','第1親差分 · 初出除外 · 配下平均']];
   for(const [label,value] of [['PR',current.pr?`#${current.pr.number}`:frameIndex===0?'はじまり':'PR外のmain'],['Git',current.revision],['取得',new Date(model.fetchedAt).toLocaleString('ja-JP')],['範囲',`main · ${model.frames.length}時点`],['配色','ColorBrewer Set3'],...mapDetails])data.append(element('dt','',label),element('dd','',value));
 }
 function changeFrame(index,{save=true,automatic=false}={}) {
@@ -286,7 +287,7 @@ function changeFrame(index,{save=true,automatic=false}={}) {
   scene?.setFrame(index); renderFrame(); if(save) updateHash(); void loadFrameRecords();
 }
 function refreshViewControls() {
-  byId('view-value').textContent=({library:'書架',rebuild:'建築',strata:'地層'})[viewMode];
+  byId('view-value').textContent=({library:`書架 ${libraryProjection}`,'library-flat':'書架 2D',rebuild:'建築',strata:'地層'})[viewMode];
   document.body.dataset.view=viewMode;
   byId('comparison-bar').hidden=!usesCurrentInventory();
   byId('pins-label').textContent=usesCurrentInventory()?'差分':'ピン';
@@ -303,9 +304,26 @@ function changeComparison(mode) {
 }
 async function mountScene() {
   const ticket=++sceneTicket, currentModel=model;scene?.dispose();scene=undefined;
-  const createScene=viewMode==='library'?(await import('./library-scene.mjs')).createLibraryScene:viewMode==='rebuild'?(await import('./rebuild-scene.mjs')).createRebuildScene:(await import('./flat-scene.mjs')).createFlatScene;
+  const createScene=viewMode==='library'?(await import('./library-orbit-scene.mjs')).createLibraryOrbitScene:viewMode==='library-flat'?(await import('./library-scene.mjs')).createLibraryScene:viewMode==='rebuild'?(await import('./rebuild-scene.mjs')).createRebuildScene:(await import('./flat-scene.mjs')).createFlatScene;
   if(ticket!==sceneTicket||model!==currentModel)return;
-  scene=createScene({canvas:byId('project-map'),model,initialFrameIndex:frameIndex,onSelect:id=>selectNode(id,true),onNavigate:id=>selectNode(id,true),onPinSelect:choosePin,onHover:showPlaceHover,onChange:state=>{if(mapLoadStatus!=='ready')return;if(state.pins)pinVisibility=state.pins;updateLocation(state.regionId);byId('scale').textContent=`${state.zoom.toFixed(1)}×`;},onError:()=>{if(ticket!==sceneTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}});
+  const renewCanvas=()=>{
+    const previous=byId('project-map'), next=previous.cloneNode(false);
+    // A canvas cannot change context type after 2D or WebGL has been acquired.
+    layoutObserver.unobserve(previous);previous.replaceWith(next);layoutObserver.observe(next);
+    next.classList.remove('library-canvas','library-orbit-canvas');
+    next.setAttribute('aria-label',viewMode==='library'?'円形図書館。ドラッグで中央を周回、上下で角度、ピンチで距離を変更。矢印キーで周回、＋−キーで距離。':'システムの地図。ドラッグで移動、ピンチまたは＋−キーで拡大縮小。');
+    return next;
+  };
+  const options={model,initialFrameIndex:frameIndex,onSelect:id=>selectNode(id,true),onNavigate:id=>selectNode(id,true),onPinSelect:choosePin,onHover:showPlaceHover,onChange:state=>{if(ticket!==sceneTicket||mapLoadStatus!=='ready')return;if(state.pins)pinVisibility=state.pins;updateLocation(state.regionId);byId('scale').textContent=`${state.zoom.toFixed(1)}×`;},onError:()=>{if(ticket!==sceneTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}};
+  libraryProjection='3D';
+  try { scene=createScene({...options,canvas:renewCanvas()}); }
+  catch(error){
+    if(viewMode!=='library'||error.message!=='library-webgl-unavailable')throw error;
+    const fallback=await import('./library-scene.mjs');
+    if(ticket!==sceneTicket||model!==currentModel)return;
+    scene=fallback.createLibraryScene({...options,canvas:renewCanvas()});libraryProjection='2D';
+    byId('project-map').setAttribute('aria-label','書架 2D。ドラッグで移動、ピンチで拡大縮小。');
+  }
   if(ticket!==sceneTicket||model!==currentModel){scene?.dispose();scene=undefined;return;}
   scene.setPalette(paletteId);scene.setPins(pins);scene.setComparisonMode?.(comparisonMode);refreshPinViewport();if(selectedId&&visibleMap().nodes.has(selectedId))scene.focus(selectedId);byId('loading').hidden=true;
 }
@@ -321,7 +339,7 @@ async function load() {
     if(payload.ancestry)await verifyAncestralHistory(payload);else await verifyHistoryMapSnapshots(payload);if(ticket!==loadTicket)return;
     model=buildStrataModel(payload,{requireSavedMaps:true});const params=new URLSearchParams(location.hash.slice(1));
     frameIndex=params.get('revision')?resolveJourneyFrame(model.frames,params.get('revision')):model.frames.length-1;
-    viewMode=['strata','rebuild'].includes(params.get('view'))?params.get('view'):'library';comparisonMode=frameIndex===0?'after':['before','after'].includes(params.get('compare'))?params.get('compare'):'diff';
+    viewMode=['strata','rebuild','library-flat'].includes(params.get('view'))?params.get('view'):'library';comparisonMode=frameIndex===0?'after':['before','after'].includes(params.get('compare'))?params.get('compare'):'diff';
     selectedId=visibleMap().nodes.has(params.get('path'))?params.get('path'):'';
     const milestones=byId('milestones');milestones.replaceChildren();
     for(const [index,current] of model.frames.entries()){
@@ -338,7 +356,7 @@ async function load() {
 byId('previous').addEventListener('click',()=>changeFrame(frameIndex-1));byId('next').addEventListener('click',()=>changeFrame(frameIndex+1));
 byId('pr-chip').addEventListener('click',()=>openDialog('picker-dialog'));byId('place-chip').addEventListener('click',()=>openPanel('place'));
 byId('issue-summary').addEventListener('click',()=>{if(activePin){openPanel('pin');return;}if(panelKind==='pins'){openPanel('pins');return;}if(panelKind==='place'&&usesCurrentInventory()){openPanel('place');return;}if(records?.issue.records.length===1)openOriginal(records.issue.records[0]);else openPanel('issue');});
-byId('view-chip').addEventListener('click',async()=>{if(!model)return;const ticket=loadTicket,currentModel=model;pendingSearchRecord=null;viewMode=({library:'rebuild',rebuild:'strata',strata:'library'})[viewMode];activePin=null;pinGroup=null;selectedId='';panelKind='issue';byId('loading').hidden=false;byId('loading-text').textContent='読込中…';renderFrame();updateHash();showMapLoadState('loading');try{await mountScene();if(ticket!==loadTicket||model!==currentModel||mapLoadStatus==='drawing-failed')return;renderFrame();showMapLoadState('ready');void loadFrameRecords();}catch{if(ticket!==loadTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}});
+byId('view-chip').addEventListener('click',async()=>{if(!model)return;const ticket=loadTicket,currentModel=model;pendingSearchRecord=null;viewMode=({library:'library-flat','library-flat':'rebuild',rebuild:'strata',strata:'library'})[viewMode];activePin=null;pinGroup=null;selectedId='';panelKind='issue';byId('loading').hidden=false;byId('loading-text').textContent='読込中…';renderFrame();updateHash();showMapLoadState('loading');try{await mountScene();if(ticket!==loadTicket||model!==currentModel||mapLoadStatus==='drawing-failed')return;renderFrame();showMapLoadState('ready');void loadFrameRecords();}catch{if(ticket!==loadTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}});
 for(const button of document.querySelectorAll('[data-comparison]'))button.addEventListener('click',()=>changeComparison(button.dataset.comparison));
 byId('return-issue').addEventListener('click',restoreIssue);
 byId('pins-chip').addEventListener('click',()=>{activePin=null;pinGroup=null;scene?.setActivePins([]);panelKind='pins';renderHeading();openPanel('pins');});
@@ -360,7 +378,7 @@ function refreshPinViewport(){
   for(const [id,x] of [['previous',left],['next',right]]){
     const button=byId(id);button.style.left=x+'px';button.style.top=top+'px';
   }
-  const bottom=desktop?top-12:panel.top-72;
+  const bottom=desktop?area.bottom-30:panel.top-72;
   scene?.setPinViewport({left:(desktop?panel.right+24:30)-area.left,top:header.bottom+24-area.top,right:area.width-30,bottom:Math.max(header.bottom+24,bottom)-area.top});
   byId('map-bottom').style.bottom=(desktop?20:innerHeight-panel.top+10)+'px';
 }

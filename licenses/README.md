@@ -14,6 +14,10 @@ Copyright (c) 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State Uni
 
 ## XOZUでの変更
 
+## 3D描画
+
+2026-11-13、円形図書館は既存依存のThree.js 0.187.0を利用する。公開物にはmodule/coreを改変せず同梱し、[MITライセンス原文](/world/vendor/LICENSE)を付ける。Three.jsの著作権表示はこの原文に保持する。外部CDNや3D素材は利用しない。以下は配色の変更記録。
+
 2026-11-12、XOZUが次を追加した。ColorBrewer原作の機能や保証とは区別する。
 
 1. Set3の12色から灰色`#D9D9D9`と最も淡い黄色`#FFFFB3`を除き、残る10色の順序と基準色を保持。
