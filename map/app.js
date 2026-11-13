@@ -148,6 +148,14 @@ async function loadFrameRecords() {
   scene?.refreshRecords?.();
   records = buildMobileRecords(selectedFrame); renderHeading(); renderRecordShortcuts(); renderPanel();openPendingSearchRecord();
 }
+function selectArchitectureLayer(selection) {
+  if(mapLoadStatus!=='ready'||!model)return;
+  const index=model.frames.findIndex(candidate=>candidate.revision===selection?.revision);
+  if(index<0){notify('このGit版の記録は未収録');return;}
+  pendingSearchRecord=null;growthSelection=null;
+  if(index!==frameIndex)changeFrame(index);
+  changeComparison('after');openPanel('issue');
+}
 function selectGrowthRecord(selection) {
   if(mapLoadStatus!=='ready'||!model)return;
   const index=model.frames.findIndex(candidate=>candidate.revision===selection.revision);
@@ -327,10 +335,10 @@ function renderFrame() {
 function renderHistoryData() {
   const current=frame();
   const data=byId('history-data');data.replaceChildren();
-  const mapDetails=usesCurrentInventory()?[['表示地図',visibleMap().id],['表現',viewMode.startsWith('library')?'1ファイル1冊 · 塔は蔵書数/種類':'現ファイル数 · 対数上限付き'],['色','所属分類'],['差分','前の表示版との2inventory比較']]:[['地図',current.mapSnapshot.mapDigest],['活動色','内容編集 0 / 2 / 8回以上'],['集計','第1親差分 · 初出除外 · 配下平均']];
+  const mapDetails=usesCurrentInventory()?[['表示地図',visibleMap().id],['表現',viewMode==='library'?'1ファイル1冊 · 建築層は第1親のGit差分':viewMode==='library-flat'?'1ファイル1冊 · 塔は蔵書数/種類':'現ファイル数 · 対数上限付き'],['色','所属分類'],['差分','前の表示版との2inventory比較']]:[['地図',current.mapSnapshot.mapDigest],['活動色','内容編集 0 / 2 / 8回以上'],['集計','第1親差分 · 初出除外 · 配下平均']];
   if(viewMode==='library' && growthState?.revision===visibleMap().revision){
     const status=recordState.status==='error'?'取得失敗':growthState.status==='not-loaded'?'原文未読込':growthState.status==='partial'?'原文一部未取得':'原文取得済み';
-    mapDetails.push(['装飾',`${growthState.total}文書 · ${growthState.ornaments}組`],['仕様の枝',`${status} · ${growthState.branches}件の照合済み宣言`],['枝の根拠','採用済みの置換宣言 · 形式外は未判定 · Gitブランチではない']);
+    mapDetails.push(['建築層',growthState.architecture?.status==='ready'?`${growthState.architecture.count}層`:'履歴未取得'],['仕様の枝',`${status} · ${growthState.branches}件の照合済み宣言`],['枝の根拠','採用済みの置換宣言 · 形式外は未判定 · Gitブランチではない']);
   }
   for(const [label,value] of [['PR',current.pr?`#${current.pr.number}`:frameIndex===0?'はじまり':'PR外のmain'],['Git',current.revision],['取得',new Date(model.fetchedAt).toLocaleString('ja-JP')],['範囲',`main · ${model.frames.length}時点`],['配色','ColorBrewer Set3'],...mapDetails])data.append(element('dt','',label),element('dd','',value));
 }
@@ -371,7 +379,7 @@ async function mountScene() {
     next.setAttribute('aria-label',viewMode==='library'?'円形図書館。ドラッグで中央を周回、上下で角度、ピンチで距離を変更。矢印キーで周回、＋−キーで距離。':'システムの地図。ドラッグで移動、ピンチまたは＋−キーで拡大縮小。');
     return next;
   };
-  const options={model,initialFrameIndex:frameIndex,onSelect:id=>selectNode(id,true),onNavigate:id=>selectNode(id,true),onPinSelect:choosePin,onRecordSelect:selectGrowthRecord,onRecordGroup:selectGrowthRecord,onHover:showPlaceHover,onChange:state=>{if(ticket!==sceneTicket||mapLoadStatus!=='ready')return;if(state.pins)pinVisibility=state.pins;if(state.growth){const nextGrowth={...state.growth,revision:state.displayRevision,ornaments:state.ornaments,branches:state.branches};if(JSON.stringify(nextGrowth)!==JSON.stringify(growthState)){growthState=nextGrowth;renderHistoryData();}}updateLocation(state.regionId);byId('scale').textContent=`${state.zoom.toFixed(1)}×`;},onError:()=>{if(ticket!==sceneTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}};
+  const options={model,initialFrameIndex:frameIndex,onSelect:id=>selectNode(id,true),onNavigate:id=>selectNode(id,true),onPinSelect:choosePin,onRecordSelect:selectGrowthRecord,onRecordGroup:selectGrowthRecord,onLayerSelect:selectArchitectureLayer,onHover:showPlaceHover,onChange:state=>{if(ticket!==sceneTicket||mapLoadStatus!=='ready')return;if(state.pins)pinVisibility=state.pins;if(state.growth){const nextGrowth={...state.growth,revision:state.displayRevision,architecture:state.architecture,branches:state.branches};if(JSON.stringify(nextGrowth)!==JSON.stringify(growthState)){growthState=nextGrowth;renderHistoryData();}}updateLocation(state.regionId);byId('scale').textContent=`${state.zoom.toFixed(1)}×`;},onError:()=>{if(ticket!==sceneTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}};
   libraryProjection='3D';
   try { scene=createScene({...options,canvas:renewCanvas()}); }
   catch(error){
@@ -394,7 +402,7 @@ async function load() {
   try {
     const response=await fetch(historyEndpoint);if(!response.ok)throw new Error('history-unavailable'); const payload=await response.json();if(ticket!==loadTicket)return;
     if(payload.ancestry)await verifyAncestralHistory(payload);else await verifyHistoryMapSnapshots(payload);if(ticket!==loadTicket)return;
-    model=buildStrataModel(payload,{requireSavedMaps:true});const params=new URLSearchParams(location.hash.slice(1));
+    model=buildStrataModel(payload,{requireSavedMaps:true});model.architectureHistory=payload;const params=new URLSearchParams(location.hash.slice(1));
     frameIndex=params.get('revision')?resolveJourneyFrame(model.frames,params.get('revision')):model.frames.length-1;
     viewMode=['strata','rebuild','library-flat'].includes(params.get('view'))?params.get('view'):'library';comparisonMode=frameIndex===0?'after':['before','after'].includes(params.get('compare'))?params.get('compare'):'diff';
     selectedId=visibleMap().nodes.has(params.get('path'))?params.get('path'):'';

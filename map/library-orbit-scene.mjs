@@ -5,8 +5,9 @@ import { buildLibraryOrbitModel, createLibraryOrbitState, normalizeLibraryOrbit,
 import { colorForMapPalette, defaultMapPaletteId, normalizeMapPaletteId } from './map-palette.mjs';
 import { buildLibraryGrowth, buildLibraryTransition, sampleLibraryTransition } from './library-growth-model.mjs';
 import { revisionLabel } from './rebuild-panel.mjs';
+import { buildLibraryArchitecture, sampleLibraryArchitecture } from './library-architecture-model.mjs';
 
-const paper = '#fffefb';
+const paper = '#ffffff';
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 const fullTurn = Math.PI * 2;
 const growthDuration = 1250;
@@ -47,8 +48,65 @@ function arcGeometry(innerRadius, outerRadius, startAngle, endAngle, height) {
   updateArcGeometry(geometry, innerRadius, outerRadius, startAngle, endAngle, height); return geometry;
 }
 
+function updateLoftGeometry(geometry, contour, height, { radius = 1, waist = 1, twist = 0, inset = 0 } = {}) {
+  const positions = geometry.attributes.position, count = contour.length; let cursor = 0;
+  const sections = [[0, .97], [.12, 1], [.8, waist], [1, .97 * waist]];
+  const point = (index, section) => {
+    const [level, width] = sections[section], angle = twist * level, item = contour[index % count];
+    const insetScale = Math.max(.1, 1 - inset / Math.max(1, Math.hypot(item.x, item.z)));
+    const x = (item.x * Math.cos(angle) - item.z * Math.sin(angle)) * radius * width * insetScale;
+    const z = (item.x * Math.sin(angle) + item.z * Math.cos(angle)) * radius * width * insetScale;
+    const envelope = Math.min(1, 124 / Math.max(1, Math.hypot(x, z)));
+    return [x * envelope, level * height, z * envelope];
+  };
+  const triangle = (first, second, third) => { for (const vertex of [first, second, third]) positions.setXYZ(cursor++, ...vertex); };
+  for (let index = 0; index < count; index++) {
+    for (let section = 0; section < sections.length - 1; section++) {
+      const a = point(index, section), b = point(index + 1, section), c = point(index + 1, section + 1), d = point(index, section + 1);
+      triangle(a, d, c); triangle(a, c, b);
+    }
+    triangle([0, 0, 0], point(index, 0), point(index + 1, 0));
+    triangle([0, height, 0], point(index + 1, 3), point(index, 3));
+  }
+  positions.needsUpdate = true; geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+}
+function loftGeometry(contour, height, options) {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(contour.length * 24 * 3), 3));
+  updateLoftGeometry(geometry, contour, height, options); return geometry;
+}
+function updateWingGeometry(geometry, start, tip, width, thickness, growth, elevation = 0) {
+  const positions = geometry.attributes.position, steps = 24; let cursor = 0;
+  const direction = new THREE.Vector3().subVectors(tip, start);
+  const lateral = new THREE.Vector3(direction.z, 0, -direction.x).normalize();
+  const point = (step, corner) => {
+    const progress = step / steps, arch = Math.sin(progress * Math.PI), side = corner & 1 ? 1 : -1, vertical = corner & 2 ? 1 : -1;
+    const spread = width * (.65 + .35 * Math.sin(progress * Math.PI));
+    return [start.x + direction.x * progress + lateral.x * (arch * 10 * growth + side * spread / 2),
+      start.y + direction.y * progress + arch * 13 * growth + vertical * thickness / 2 + elevation,
+      start.z + direction.z * progress + lateral.z * (arch * 10 * growth + side * spread / 2)];
+  };
+  const triangle = (a, b, c) => { for (const vertex of [a, b, c]) positions.setXYZ(cursor++, ...vertex); };
+  const quad = (a, b, c, d) => { triangle(a, b, c); triangle(a, c, d); };
+  for (let step = 0; step < steps; step++) {
+    for (const [a, b] of [[0,1],[1,3],[3,2],[2,0]]) quad(point(step,a),point(step+1,a),point(step+1,b),point(step,b));
+  }
+  quad(point(0,0),point(0,2),point(0,3),point(0,1));
+  quad(point(steps,0),point(steps,1),point(steps,3),point(steps,2));
+  positions.needsUpdate = true; geometry.computeVertexNormals(); geometry.computeBoundingSphere();
+}
+function wingGeometry() {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array((24 * 24 + 12) * 3), 3)); return geometry;
+}
+function architectureLayers(architecture) { return [architecture?.baseline, ...(architecture?.layers || [])].filter(Boolean); }
+function sampleWorldTransition(plan, progress) {
+  const sample = sampleLibraryTransition(plan, progress);
+  sample.architecture = sampleLibraryArchitecture(plan.from?.architecture, plan.to.architecture, progress); return sample;
+}
+
 export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, onSelect = () => {},
-  onNavigate = () => {}, onHover = () => {}, onChange = () => {}, onError = () => {}, onRecordSelect = () => {}, onRecordGroup = () => {} }) {
+  onNavigate = () => {}, onHover = () => {}, onChange = () => {}, onError = () => {}, onRecordSelect = () => {}, onRecordGroup = () => {}, onLayerSelect = () => {} }) {
   if (!model?.frames?.length) throw new Error('library-frame-invalid');
   let context;
   try { context = canvas.getContext('webgl2', { alpha: false, antialias: true, powerPreference: 'high-performance' }); }
@@ -78,9 +136,9 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
   const raycaster = new THREE.Raycaster(), rayPoint = new THREE.Vector2(), projected = new THREE.Vector3();
   const temporary = new THREE.Object3D(), color = new THREE.Color();
   let frameIndex = initialFrameIndex, comparisonMode = 'diff', paletteId = defaultMapPaletteId;
-  let world, displayedWorld, comparison, orbit, worldGroup = new THREE.Group(), towerGroup, platformGroup, crownGroup, bookMesh, bookPages, bookBands, ghostBooks, pickables = [];
+  let world, displayedWorld, comparison, orbit, worldGroup = new THREE.Group(), towerGroup, platformGroup, bookMesh, bookPages, bookBands, ghostBooks, pickables = [];
   let transition = null, transitionStarted = 0, transitionFrom = '', transitionTo = '', outlineMesh;
-  let shelfVisuals = new Map(), tierVisuals = new Map(), ornamentVisuals = new Map(), branchVisuals = new Map(), ghostIds = [], annotationGroup;
+  let shelfVisuals = new Map(), layerVisuals = new Map(), branchVisuals = new Map(), ghostIds = [], annotationGroup;
   let selectedId = null, hoveredId = null, hoveredAnnotation = null, focusedId = '', pins = [], activePaths = new Set();
   let width = 1, height = 1, pixelRatio = 1, viewport = { left: 0, top: 0, right: 1, bottom: 1 };
   let requestedViewport = null, hasViewport = false, animation = null;
@@ -175,32 +233,20 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
     ghostBooks.visible = sample.books.some(book => ghostIds.includes(book.id) && book.size.height > .01);
     vertices.needsUpdate = colors.needsUpdate = true;
   }
-  function buildTower(ivory, trim, sample) {
-    towerGroup = new THREE.Group(); worldGroup.add(towerGroup); tierVisuals.clear();
-    const tower = world.tower, baseRadius = tower.radius;
-    addMesh(towerGroup, new THREE.CylinderGeometry(baseRadius + 18, baseRadius + 23, 5, 80), ivory, { y: 3 }, '');
-    addMesh(towerGroup, new THREE.CylinderGeometry(baseRadius + 11, baseRadius + 16, 8, 80), ivory, { y: 9 }, '');
-    const palette = world.library.landmarks.map(node => nodeColor(node));
-    if (!palette.length) palette.push('#8dd3c7', '#bebada', '#fdb462');
-    sample.tower.tiers.forEach((sampleTier, index) => {
-      const tier = world.tower.tiers[index] || sampleTier, group = new THREE.Group(); towerGroup.add(group);
-      tierVisuals.set(String(index), { group, tier });
-      const tint = material(palette[index % palette.length], { roughness: .48, metalness: .12 });
-      addMesh(group, new THREE.CylinderGeometry(tier.topRadius * .7, tier.bottomRadius * .68, tier.height, 48), ivory, { y: tier.height / 2 }, '');
-      const eaveY = tier.height * .84;
-      addMesh(group, new THREE.CylinderGeometry(tier.topRadius * .35, tier.bottomRadius + 5, tier.height * .3, 64), ivory, { y: eaveY }, '');
-      addMesh(group, new THREE.CylinderGeometry(tier.bottomRadius + 5, tier.bottomRadius + 5, 2.4, 64), tint, { y: eaveY - tier.height * .15 }, '');
-      const ring = addMesh(group, new THREE.TorusGeometry(tier.bottomRadius * .67, 1.3, 6, 64), trim, { y: 3 }, ''); ring.rotation.x = Math.PI / 2;
-      for (let spoke = 0; spoke < 8; spoke++) {
-        const angle = spoke / 8 * fullTurn, radius = tier.bottomRadius * .58;
-        addMesh(group, new THREE.CylinderGeometry(1.35, 1.65, tier.height * .53, 6), trim,
-          { x: Math.cos(angle) * radius, y: tier.height * .28, z: Math.sin(angle) * radius }, '');
-      }
-    });
-    crownGroup = new THREE.Group(); towerGroup.add(crownGroup);
-    addMesh(crownGroup, new THREE.ConeGeometry(12, 30, 48), ivory, { y: -15 }, '');
-    addMesh(crownGroup, new THREE.SphereGeometry(3.3, 16, 12), trim, { y: 3 }, '');
-    const halo = addMesh(crownGroup, new THREE.TorusGeometry(17, .8, 6, 56), trim, { y: -20 }, ''); halo.rotation.x = Math.PI / 2;
+  function layerColor(layer) {
+    return nodeColor({ id: layer.category || 'apps', path: layer.category || 'apps', type: 'folder', fileCount: 1 });
+  }
+  function buildTower(ivory, sample) {
+    towerGroup = new THREE.Group(); worldGroup.add(towerGroup); layerVisuals.clear();
+    for (const layer of architectureLayers(sample.architecture)) {
+      const group = new THREE.Group(); towerGroup.add(group);
+      const glass = new THREE.Color(layerColor(layer)).lerp(new THREE.Color('#314e5b'), .42);
+      const floor = addMesh(group, loftGeometry(layer.contour, .7), ivory);
+      const body = addMesh(group, loftGeometry(layer.contour, Math.max(.001, layer.height - 1.2), { inset: layer.inset * .5 }), material(glass, { roughness: .32, metalness: .12 }));
+      const roof = addMesh(group, loftGeometry(layer.contour, .5), ivory);
+      for (const mesh of [floor, body, roof]) { mesh.userData.annotation = { kind: 'layer', id: layer.id }; pickables.push(mesh); }
+      layerVisuals.set(layer.id, { group, floor, body, roof });
+    }
   }
   function buildShelves(ivory, sample) {
     shelfVisuals.clear();
@@ -214,28 +260,21 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
     }
   }
   function createGrowthWorld(frame) {
-    const next = buildLibraryOrbitModel(frame); next.growth = buildLibraryGrowth(frame, { world: next }); return next;
+    const next = buildLibraryOrbitModel(frame);
+    next.architecture = buildLibraryArchitecture(model.architectureHistory, frame.revision);
+    const architecture = next.architecture, known = architecture.status === 'ready';
+    next.tower = { ...next.tower, height: known ? architecture.height : 0, radius: known ? architecture.radius : 0, levels: architecture.layers.length, tiers: [] };
+    next.target = { x: 0, y: next.tower.height * .4, z: 0 };
+    next.growth = buildLibraryGrowth(frame, { world: next }); return next;
   }
   function buildAnnotations(sample) {
-    annotationGroup = new THREE.Group(); worldGroup.add(annotationGroup); ornamentVisuals.clear(); branchVisuals.clear();
-    const colors = { issue: '#8dd3c7', sdd: '#bebada', adr: '#fdb462' };
-    for (const ornament of sample.growth.ornaments) {
-      const group = new THREE.Group(); annotationGroup.add(group);
-      const radius = 4.6 + Math.min(4, Math.log2(ornament.count + 1));
-      const geometry = ornament.kind === 'sdd' ? new THREE.OctahedronGeometry(radius) : new THREE.SphereGeometry(radius, 16, 12);
-      const jewel = addMesh(group, geometry, material(colors[ornament.kind], { metalness: .3, roughness: .22 }), null);
-      const cap = addMesh(group, new THREE.CylinderGeometry(1.8, 2.5, 2, 8), material('#cfbd94', { metalness: .65 }), { y: radius + 1 });
-      for (const mesh of [jewel, cap]) { mesh.userData.annotation = { kind: 'ornament', id: ornament.id }; pickables.push(mesh); }
-      const thread = addMesh(group, new THREE.CylinderGeometry(.35, .35, 9, 5), material('#d6c9ac'), { y: radius + 6 });
-      const halo = addMesh(group, new THREE.TorusGeometry(radius + 2, .45, 5, 24), material('#fff2bf', { transparent: true, opacity: 0, depthWrite: false }), null, undefined, false);
-      ornamentVisuals.set(ornament.id, { group, jewel, thread, halo });
-    }
+    annotationGroup = new THREE.Group(); worldGroup.add(annotationGroup); branchVisuals.clear();
     for (const branch of sample.growth.branches) {
       const group = new THREE.Group(); annotationGroup.add(group);
-      const stem = addMesh(group, new THREE.CylinderGeometry(1.2, 2, 1, 8), material('#c9b588', { metalness: .4 }), null);
-      const gem = addMesh(group, new THREE.OctahedronGeometry(6.5), material('#80b1d3', { metalness: .2, roughness: .28 }), null);
-      for (const mesh of [stem, gem]) { mesh.userData.annotation = { kind: 'branch', id: branch.id }; pickables.push(mesh); }
-      branchVisuals.set(branch.id, { group, stem, gem });
+      const wing = addMesh(group, wingGeometry(), material('#f7fbfc', { roughness: .55, side: THREE.DoubleSide }));
+      const glass = addMesh(group, wingGeometry(), material('#80b1d3', { metalness: .15, roughness: .3, side: THREE.DoubleSide }));
+      for (const mesh of [wing, glass]) { mesh.userData.annotation = { kind: 'branch', id: branch.id }; pickables.push(mesh); }
+      branchVisuals.set(branch.id, { group, wing, glass });
     }
   }
   function applyWorldSample(sample) {
@@ -254,31 +293,34 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
         post.rotation.y = Math.PI / 2 - angle; post.scale.set(2.7, shelf.height, shelf.outerRadius - shelf.innerRadius + 4);
       });
     }
-    const tiers = new Map(sample.tower.tiers.map((tier, index) => [String(index), tier]));
-    for (const [id, visual] of tierVisuals) {
-      const tier = tiers.get(id); visual.group.visible = !!tier && (tier.scale ?? 1) > .001;
-      if (!tier) continue; const growth = tier.scale ?? 1;
-      visual.group.position.y = tier.y; visual.group.scale.set(Math.max(.001, growth * tier.bottomRadius / visual.tier.bottomRadius), Math.max(.001, growth * tier.height / visual.tier.height), Math.max(.001, growth * tier.bottomRadius / visual.tier.bottomRadius));
-    }
-    crownGroup.position.y = sample.tower.height;
-    const ornaments = new Map(sample.growth.ornaments.map(item => [item.id, item]));
-    for (const [id, visual] of ornamentVisuals) {
-      const item = ornaments.get(id); visual.group.visible = !!item && (item.scale ?? 1) > .001;
-      if (item) {
-        visual.group.position.set(item.position.x, item.position.y, item.position.z); visual.group.scale.setScalar(Math.max(.001, item.scale ?? 1));
-        const pulse = item.pulse || 0; visual.halo.visible = pulse > .01; visual.halo.material.opacity = pulse * .8; visual.halo.scale.setScalar(1 + pulse * .4); visual.jewel.scale.setScalar(1 + pulse * .12);
-      }
+    const layers = new Map(architectureLayers(sample.architecture).map(layer => [layer.id, layer]));
+    for (const [id, visual] of layerVisuals) {
+      const layer = layers.get(id); visual.group.visible = !!layer && (layer.scale ?? 1) > .001;
+      if (!layer) continue;
+      const changed = (layer.changes?.added || 0) + (layer.changes?.modified || 0) + (layer.changes?.deleted || 0);
+      const signature = Number.parseInt(layer.changeFingerprint || '0', 16) >>> 0;
+      const addedShare = changed ? (layer.changes.added || 0) / changed : 0, deletedShare = changed ? (layer.changes.deleted || 0) / changed : 0;
+      const waist = clamp(.70 + (signature & 65535) / 65535 * .4 + (addedShare - deletedShare) * .06, .70, 1.10);
+      const twist = ((signature >>> 16) / 65535 * 2 - 1) * .18;
+      visual.group.position.y = layer.y;
+      const floorHeight = Math.min(.7, layer.height * .22), roofHeight = Math.min(.5, layer.height * .15);
+      const bodyHeight = Math.max(.001, layer.height - floorHeight - roofHeight);
+      updateLoftGeometry(visual.floor.geometry, layer.contour, floorHeight);
+      updateLoftGeometry(visual.body.geometry, layer.contour, bodyHeight, { inset: (layer.inset || 5) * .5, waist, twist });
+      updateLoftGeometry(visual.roof.geometry, layer.contour, roofHeight, { radius: Math.min(1, waist + .04), twist });
+      visual.body.position.y = floorHeight; visual.roof.position.y = layer.height - roofHeight;
     }
     const branches = new Map(sample.growth.branches.map(item => [item.id, item]));
     for (const [id, visual] of branchVisuals) {
       const item = branches.get(id); visual.group.visible = !!item && (item.scale ?? 1) > .001;
       if (!item) continue;
-      const start = new THREE.Vector3(item.position.x, item.position.y, item.position.z), tip = new THREE.Vector3(item.tip.x, item.tip.y, item.tip.z);
+      const layer = architectureLayers(sample.architecture).filter(candidate => candidate.recordPaths?.includes(item.sourcePath)).at(-1);
+      const offset = layer ? layer.y + layer.height * .45 - item.position.y : 0;
+      const start = new THREE.Vector3(item.position.x, item.position.y + offset, item.position.z), tip = new THREE.Vector3(item.tip.x, item.tip.y + offset, item.tip.z);
       const growth = Math.max(.001, item.scale ?? 1); tip.lerpVectors(start, tip, growth);
-      const direction = tip.clone().sub(start), length = direction.length();
-      visual.stem.position.copy(start.clone().add(tip).multiplyScalar(.5)); visual.stem.scale.y = length;
-      visual.stem.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize()); visual.gem.position.copy(tip);
-      visual.gem.scale.setScalar(growth);
+      updateWingGeometry(visual.wing.geometry, start, tip, 13 * growth, 2.4, growth);
+      updateWingGeometry(visual.glass.geometry, start, tip, 8 * growth, .7, growth, 1.7);
+      visual.anchor = { x: tip.x, y: tip.y + 8, z: tip.z };
     }
     worldGroup.updateMatrixWorld(true);
   }
@@ -296,16 +338,15 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
     transitionTo = revisionLabel(model.frames.find(frame => frame.revision === world.revision));
     transitionLabel.textContent = `${transitionFrom} → ${transitionTo}`; transitionLabel.hidden = !transition;
     const progress = resume ? clamp((performance.now() - transitionStarted) / growthDuration, 0, 1) : 0;
-    const sample = transition ? sampleLibraryTransition(plan, progress) : world;
+    const sample = transition ? sampleWorldTransition(plan, progress) : world;
     if (selectedId !== null && !world.library.nodes.has(selectedId)) selectedId = null;
     if (!world.library.nodes.has(focusedId)) focusedId = '';
     disposeGroup(worldGroup); pickables = [];
-    const ivory = material('#fffdf6'), trim = material('#cfc1a1', { metalness: .52, roughness: .42 });
+    const ivory = material('#fffdfa', { roughness: .48, metalness: .02 });
     platformGroup = new THREE.Group(); worldGroup.add(platformGroup);
-    addMesh(platformGroup, new THREE.CylinderGeometry(world.radius + 22, world.radius + 27, 10, 160), material('#f1eee5'), { y: -5 }, '', false);
-    addMesh(platformGroup, new THREE.CylinderGeometry(world.radius + 21, world.radius + 21, 1.2, 160), ivory, { y: .7 }, '', false);
-    const rim = addMesh(platformGroup, new THREE.TorusGeometry(world.radius + 19, 1.1, 5, 160), trim, { y: 1.7 }, '', false); rim.rotation.x = Math.PI / 2;
-    buildShelves(ivory, sample); buildBooks(ivory, sample); buildTower(ivory, trim, sample); buildAnnotations(sample); applyWorldSample(sample);
+    const shadow = addMesh(platformGroup, new THREE.PlaneGeometry(world.radius * 3, world.radius * 3), new THREE.ShadowMaterial({ color: '#80939a', opacity: .1, depthWrite: false }), { y: -.3 }, undefined, false);
+    shadow.rotation.x = -Math.PI / 2;
+    buildShelves(ivory, sample); buildBooks(ivory, sample); buildTower(ivory, sample); buildAnnotations(sample); applyWorldSample(sample);
     sunlight.shadow.camera.left = sunlight.shadow.camera.bottom = -world.radius - 100;
     sunlight.shadow.camera.right = sunlight.shadow.camera.top = world.radius + 100;
     sunlight.shadow.camera.far = 1600; sunlight.shadow.camera.updateProjectionMatrix();
@@ -326,8 +367,8 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
         transition = recordsPlan; transitionStarted = performance.now();
       }
     }
-    const sample = transition ? sampleLibraryTransition(transition, clamp((performance.now() - transitionStarted) / growthDuration, 0, 1)) : world;
-    pickables = pickables.filter(mesh => !mesh.userData.annotation);
+    const sample = transition ? sampleWorldTransition(transition, clamp((performance.now() - transitionStarted) / growthDuration, 0, 1)) : world;
+    pickables = pickables.filter(mesh => mesh.userData.annotation?.kind !== 'branch');
     disposeGroup(annotationGroup); worldGroup.remove(annotationGroup); buildAnnotations(sample); applyWorldSample(sample); requestDraw();
   }
   function viewportAspect() { return Math.max(.25, (viewport.right - viewport.left) / Math.max(1, viewport.bottom - viewport.top)); }
@@ -367,6 +408,7 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
   }
   function paintLabels() {
     const occupied = [], visible = new Set();
+    paintRecordLabels(occupied, visible);
     const chosen = selectedId !== null ? world.library.nodes.get(selectedId) : null;
     const focus = world.library.nodes.get(focusedId);
     const candidates = [chosen, hoveredId ? world.library.nodes.get(hoveredId) : null, world.library.root,
@@ -393,45 +435,57 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
       label.setAttribute('aria-pressed', String(selectedId === node.id)); label.title = node.path || 'XOZU';
       Object.assign(label.style, { display: 'grid', left: `${box.left}px`, top: `${box.top}px`, width: `${labelWidth}px` });
     }
-    paintRecordLabels(occupied, visible);
     for (const [id, label] of labels) if (!visible.has(id)) label.style.display = 'none';
   }
   function paintRecordLabels(occupied, visible) {
-    const shown = displayedWorld || world, available = shown.growth.ornaments.filter(item => item.selectable !== false && (item.scale ?? 1) > .3);
-    const nearest = [...available].sort((first, second) => {
-      const distance = item => camera.position.distanceToSquared(new THREE.Vector3(item.position.x, item.position.y, item.position.z));
-      return distance(first) - distance(second);
-    });
-    const candidates = ['issue', 'sdd', 'adr'].map(kind => nearest.find(item => item.kind === kind)).filter(Boolean);
-    if (hoveredAnnotation) {
-      const hovered = hoveredAnnotation.kind === 'branch' ? shown.growth.branches.find(item => item.id === hoveredAnnotation.id) : available.find(item => item.id === hoveredAnnotation.id);
-      if (hovered) candidates.unshift(hovered);
-    }
-    for (const item of candidates) {
-      const branch = !!item.sourcePath, key = `record:${item.id}`, point = projectPosition(branch ? item.tip : item.position);
-      if (!point || visible.has(key)) continue;
-      const name = branch ? 'ADR' : item.kind.toUpperCase(), badge = !branch && item.count > 1 ? String(item.count) : '';
-      const box = { left: point.x - 26, right: point.x + 26, top: point.y - 36, bottom: point.y - 8 };
+    const shown = displayedWorld || world, layers = architectureLayers(shown.architecture);
+    const current = layers.find(layer => layer.revision === world.revision);
+    const hovered = hoveredAnnotation?.kind === 'layer' ? layers.find(layer => layer.id === hoveredAnnotation.id) : null;
+    const candidates = [current, hovered].filter(Boolean);
+    for (const layer of candidates) {
+      if (layer.selectable === false || (layer.scale ?? 1) < .2) continue;
+      const key = `layer:${layer.id}`; if (visible.has(key)) continue;
+      const edge = [...layer.contour].sort((a, b) => (b.x * camera.position.x + b.z * camera.position.z) - (a.x * camera.position.x + a.z * camera.position.z))[0];
+      const point = projectPosition({ x: edge.x, y: layer.y + layer.height + 6, z: edge.z }); if (!point) continue;
+      const name = layer.prNumber ? `PR #${layer.prNumber}` : `Git ${layer.revision.slice(0, 7)}`;
+      const labelWidth = clamp(name.length * 6.5 + 12, 48, 130);
+      const box = { left: point.x - labelWidth / 2, right: point.x + labelWidth / 2, top: point.y - 27, bottom: point.y };
       if (box.left < viewport.left || box.right > viewport.right || box.top < viewport.top || box.bottom > viewport.bottom || occupied.some(other => overlaps(box, other))) continue;
       occupied.push(box); visible.add(key);
       let label = labels.get(key);
       if (!label) {
         label = document.createElement('button'); label.type = 'button'; label.className = 'library-orbit-label library-orbit-record-label';
-        label.dataset.annotationId = item.id; label.dataset.annotationKind = branch ? 'branch' : 'ornament';
-        const title = document.createElement('span'), count = document.createElement('small'); label.append(title, count);
-        label.addEventListener('click', event => { event.stopPropagation(); if (event.detail === 0) activateAnnotation({ id: label.dataset.annotationId, kind: label.dataset.annotationKind }); });
+        label.dataset.annotationId = layer.id; label.dataset.annotationKind = 'layer';
+        const title = document.createElement('span'); label.append(title);
+        label.addEventListener('click', event => { event.stopPropagation(); if (event.detail === 0) activateAnnotation({ id: label.dataset.annotationId, kind: 'layer' }); });
         labelHost.append(label); labels.set(key, label);
       }
-      label.firstChild.textContent = name; label.lastChild.textContent = badge; label.lastChild.hidden = !badge;
-      label.setAttribute('aria-label', branch ? `ADR ${item.sourcePath}` : `${item.label}、${item.count}件`);
-      Object.assign(label.style, { display: 'flex', left: `${box.left}px`, top: `${box.top}px`, width: '52px' });
+      label.firstChild.textContent = name; label.setAttribute('aria-label', name);
+      label.setAttribute('aria-current', String(layer.revision === world.revision));
+      Object.assign(label.style, { display: 'grid', left: `${box.left}px`, top: `${box.top}px`, width: `${labelWidth}px` });
+    }
+    for (const branch of shown.growth.branches) {
+      if (branch.selectable === false || (branch.scale ?? 1) < .4) continue;
+      const anchor = branchVisuals.get(branch.id)?.anchor, point = anchor ? projectPosition(anchor) : null;
+      if (!point) continue;
+      const key = `bridge:${branch.id}`, box = { left: point.x - 24, right: point.x + 24, top: point.y - 26, bottom: point.y };
+      if (box.left < viewport.left || box.right > viewport.right || box.top < viewport.top || box.bottom > viewport.bottom || occupied.some(other => overlaps(box, other))) continue;
+      occupied.push(box); visible.add(key); let label = labels.get(key);
+      if (!label) {
+        label = document.createElement('button'); label.type = 'button'; label.className = 'library-orbit-label library-orbit-record-label';
+        label.dataset.annotationId = branch.id; label.dataset.annotationKind = 'branch'; label.textContent = 'ADR';
+        label.addEventListener('click', event => { event.stopPropagation(); if (event.detail === 0) activateAnnotation({ id: label.dataset.annotationId, kind: 'branch' }); });
+        labelHost.append(label); labels.set(key, label);
+      }
+      label.setAttribute('aria-label', branch.label || branch.sourcePath);
+      Object.assign(label.style, { display: 'grid', left: `${box.left}px`, top: `${box.top}px`, width: '48px' });
     }
   }
   function reportState() {
     const constraints = libraryOrbitConstraints(world, { aspect: viewportAspect() });
     const state = { renderer: 'webgl', regionId: focusedId, zoom: constraints.fitDistance / orbit.distance, frameIndex,
       comparisonMode, comparisonStatus: comparison.status, displayRevision: world.library.revision, paletteId,
-      growth: world.growth.coverage, ornaments: world.growth.ornaments.length, branches: world.growth.branches.length,
+      growth: world.growth.coverage, architecture: { status: world.architecture.status, count: world.architecture.layers.length, coverage: world.architecture.coverage }, branches: world.growth.branches.length,
       transition: { active: !!transition, fromRevision: transition?.comparison.fromRevision ?? null, toRevision: world.revision, progress: transition ? displayedWorld.transition?.progress ?? 0 : 1 },
       books: world.books.length, towerLevels: world.tower.levels, towerHeight: world.tower.height,
       orbit: { yaw: orbit.yaw, pitch: orbit.pitch, distance: orbit.distance }, pins: { aggregation: 'folders', total: pins.length } };
@@ -454,7 +508,7 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
       }
       if (transition) {
         const progress = clamp((now - transitionStarted) / growthDuration, 0, 1);
-        applyWorldSample(sampleLibraryTransition(transition, progress));
+        applyWorldSample(sampleWorldTransition(transition, progress));
         if (progress === 1) { transition = null; transitionLabel.hidden = true; rebuildWorld({ animate: false }); }
       }
       canvas.setAttribute('aria-busy', String(!!transition));
@@ -480,6 +534,11 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
   }
   function activateAnnotation(annotation) {
     if (!annotation || failed || disposed) return;
+    if (annotation.kind === 'layer') {
+      const layer = architectureLayers(world.architecture).find(item => item.id === annotation.id);
+      if (layer) onLayerSelect({ revision: layer.revision, pr: layer.prNumber, changes: layer.changes, recordPaths: layer.recordPaths });
+      return;
+    }
     if (annotation.kind === 'branch') {
       const branch = world.growth.branches.find(item => item.id === annotation.id);
       if (branch) onRecordSelect({ revision: world.revision, path: branch.sourcePath, proof: branch.proof, targetPath: branch.targetPath });
@@ -511,7 +570,7 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
     if (!hit || hit.object.userData.ghost) return null;
     const annotation = hit.object.userData.annotation;
     if (annotation) {
-      const collection = annotation.kind === 'branch' ? displayedWorld.growth.branches : displayedWorld.growth.ornaments;
+      const collection = annotation.kind === 'layer' ? architectureLayers(displayedWorld.architecture) : displayedWorld.growth.branches;
       const item = collection.find(entry => entry.id === annotation.id);
       return item && item.selectable !== false ? annotation : null;
     }
