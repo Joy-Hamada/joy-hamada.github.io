@@ -283,17 +283,20 @@ export function createLibraryOrbitScene({ canvas, model, initialFrameIndex = 0, 
     worldGroup.updateMatrixWorld(true);
   }
   function rebuildWorld({ animate = true } = {}) {
-    const previous = displayedWorld || world, wasAnimating = !!transition;
+    const previous = displayedWorld || world, ongoing = transition, wasAnimating = !!ongoing;
     const before = frameIndex > 0 ? model.frames[frameIndex - 1] : null;
     comparison = compareRevisionTrees(before, model.frames[frameIndex]);
     world = createGrowthWorld(comparisonMode === 'before' && before ? before : model.frames[frameIndex]);
     const shouldAnimate = animate && !reducedMotion && previous && (previous.revision !== world.revision || wasAnimating);
-    const plan = buildLibraryTransition(previous, world);
-    transition = shouldAnimate ? plan : null; transitionStarted = performance.now();
-    transitionFrom = previous ? revisionLabel(model.frames.find(frame => frame.revision === previous.revision)) : '';
+    const resume = shouldAnimate && ongoing?.to.revision === world.revision;
+    const plan = resume ? { ...ongoing, to: world } : buildLibraryTransition(previous, world);
+    transition = shouldAnimate ? plan : null; if (!resume) transitionStarted = performance.now();
+    const fromRevision = transition ? plan.comparison.fromRevision : previous?.revision;
+    transitionFrom = fromRevision ? revisionLabel(model.frames.find(frame => frame.revision === fromRevision)) : '';
     transitionTo = revisionLabel(model.frames.find(frame => frame.revision === world.revision));
     transitionLabel.textContent = `${transitionFrom} → ${transitionTo}`; transitionLabel.hidden = !transition;
-    const sample = transition ? sampleLibraryTransition(plan, 0) : world;
+    const progress = resume ? clamp((performance.now() - transitionStarted) / growthDuration, 0, 1) : 0;
+    const sample = transition ? sampleLibraryTransition(plan, progress) : world;
     if (selectedId !== null && !world.library.nodes.has(selectedId)) selectedId = null;
     if (!world.library.nodes.has(focusedId)) focusedId = '';
     disposeGroup(worldGroup); pickables = [];
