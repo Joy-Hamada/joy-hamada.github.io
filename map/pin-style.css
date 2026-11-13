@@ -1,0 +1,107 @@
+/* Shrinking the touch target would make the lighter marker harder to select. */
+.strata-pins .strata-pin {
+  --pin-tint: #E3E9EF;
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.strata-pins .strata-pin-kind { display: none; }
+.strata-pins .strata-pin-count {
+  display: grid;
+  place-items: center;
+  position: relative;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  margin: 5px;
+  box-sizing: border-box;
+  pointer-events: none;
+  line-height: 1;
+  color: #3A4A5C;
+  background: linear-gradient(160deg, #FFFFFFB3 0%, #FFFFFF38 47%, #FFFFFF00 100%), var(--pin-tint);
+  border: 1.5px solid #FFFFFEEB;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px #26384A26, 0 5px 15px #26384A26, inset 0 1px 0 #FFFFFFE0, inset 0 -1px 0 #52647914;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 0 #FFFFFF40;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.strata-pins .strata-pin:hover:not(:disabled),
+.strata-pins .strata-pin:active:not(:disabled) { background: transparent; }
+.strata-pins .strata-pin:focus-visible { outline: none; }
+
+.strata-pins .strata-pin:hover:not(:disabled) .strata-pin-count {
+  background: linear-gradient(160deg, #FFFFFFD9 0%, #FFFFFF59 48%, #FFFFFF1A 100%), var(--pin-tint);
+  box-shadow: 0 1px 2px #26384A26, 0 6px 17px #26384A33, inset 0 1px 0 #FFFFFFF0, inset 0 -1px 0 #52647914;
+}
+
+.strata-pins .strata-pin:active:not(:disabled) .strata-pin-count {
+  background: linear-gradient(160deg, #FFFFFF38, #FFFFFF00), var(--pin-tint);
+  box-shadow: 0 1px 3px #26384A26, inset 0 1px 2px #52647924;
+}
+
+.strata-pins .strata-pin:focus-visible .strata-pin-count {
+  outline: 3px solid #445C74;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 1px #FFFFFF, 0 5px 13px #26384A29, inset 0 1px 0 #FFFFFFC7;
+}
+
+.strata-pins .strata-pin[data-selected="true"] .strata-pin-count {
+  color: #263B52;
+  border-color: #445C74;
+  outline: 2px solid #FFFFFF;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px #445C74, 0 5px 13px #26384A33, inset 0 1px 0 #FFFFFFC7;
+}
+
+.strata-pins .strata-pin:disabled .strata-pin-count {
+  color: #74808D;
+  opacity: .6;
+  cursor: default;
+  box-shadow: 0 1px 3px #26384A17, inset 0 1px 0 #FFFFFF8C;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strata-pins .strata-pin-count { transition: none; }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .strata-pins .strata-pin-count,
+  .strata-pins .strata-pin:hover:not(:disabled) .strata-pin-count,
+  .strata-pins .strata-pin:active:not(:disabled) .strata-pin-count {
+    background: var(--pin-tint);
+    border-color: #FFFFFF;
+    color: #1F3246;
+    text-shadow: none;
+    box-shadow: 0 0 0 1px #526479, 0 2px 5px #26384A26;
+  }
+  .strata-pins .strata-pin[data-selected="true"] .strata-pin-count { border-color: #1F3246; outline-color: #1F3246; outline-offset: 2px; }
+}
+
+@media (forced-colors: active) {
+  .strata-pins .strata-pin-count,
+  .strata-pins .strata-pin:hover:not(:disabled) .strata-pin-count,
+  .strata-pins .strata-pin:active:not(:disabled) .strata-pin-count {
+    background: ButtonFace;
+    color: ButtonText;
+    border-color: ButtonText;
+    box-shadow: none;
+    text-shadow: none;
+  }
+  .strata-pins .strata-pin:focus-visible .strata-pin-count { outline-color: Highlight; }
+  .strata-pins .strata-pin[data-selected="true"] .strata-pin-count { border-color: Highlight; outline: 3px solid Highlight; outline-offset: 2px; }
+  .strata-pins .strata-pin:disabled .strata-pin-count { color: GrayText; border-color: GrayText; opacity: 1; }
+}

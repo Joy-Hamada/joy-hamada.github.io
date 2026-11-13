@@ -1,0 +1,39 @@
+.xozu-brand {
+  --xozu-ink: #202529;
+  --xozu-o-fill: transparent;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.xozu-logo {
+  display: block;
+  width: 156px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+body[data-xozu-theme="mosaic"] { --xozu-main-color: var(--red, #ce624c); }
+body[data-xozu-theme="graph"],
+body[data-xozu-theme="studies"],
+body[data-xozu-theme="evidence"] { --xozu-main-color: var(--green, #276b58); }
+body[data-xozu-theme="city"] { --xozu-main-color: var(--accent, #6258c7); }
+body[data-xozu-theme="system"] { --xozu-main-color: var(--cyan, #008f9f); }
+
+@supports (color: color-mix(in srgb, black, white)) {
+  body[data-xozu-theme] .xozu-brand {
+    --xozu-o-fill: color-mix(in srgb, var(--xozu-main-color) 25%, white);
+  }
+}
+
+.xozu-loading-symbol {
+  display: block;
+  width: 68px;
+  height: 60px;
+  margin: 0 auto 14px;
+}
+
+@media (max-width: 740px) {
+  .xozu-logo { width: 132px; height: 31px; }
+}

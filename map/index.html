@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>XOZU</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/brand/brand.css"><link rel="stylesheet" href="/map/style.css"><link rel="stylesheet" href="/map/pin-style.css"><link rel="stylesheet" href="/map/rebuild-style.css"><script type="module" src="/map/app.js"></script><link rel="stylesheet" href="/map/library-style.css"><link rel="stylesheet" href="/map/history-search.css"><meta name="xozu-history" content="/history.json"><meta name="xozu-source-access" content="unavailable"><meta name="xozu-audience" content="public"></head>
+<body data-view="library"><main class="map-app">
+<header class="map-header">
+<div class="search-bar"><button id="project-home" disabled class="brand-button" aria-label="XOZU・全体へ"><img src="/brand/xozu-symbol-black.svg" width="32" height="32" alt=""></button><button id="question-search" disabled class="question-button" aria-label="履歴を検索・質問"><span>検索・質問</span></button><button id="account" class="account-button" aria-label="アカウント（準備中）"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/></svg></button></div>
+<nav class="filter-chips" aria-label="プロジェクトと表示する版"><button id="project-chip" disabled><span>PRJ</span> XOZU <b>⌄</b></button><button id="pr-chip" disabled><span>PR</span> <strong id="pr-value">読込中</strong> <b>⌄</b></button><button id="place-chip" disabled><span>場所</span><strong id="place-value">全体</strong><b>⌄</b></button><button id="pins-chip" disabled><span id="pins-label">差分</span> <strong id="pins-count">読込中…</strong></button><button id="view-chip" disabled aria-label="書架・建築・地層を切り替える"><strong id="view-value">書架</strong> <b>⇄</b></button><button id="map-info" disabled aria-label="データ">ⓘ</button></nav>
+<div id="comparison-bar" class="comparison-bar"><div class="comparison-switch" role="group" aria-label="比較の表示"><button disabled data-comparison="before" aria-pressed="false">前</button><button disabled data-comparison="diff" aria-pressed="true">差分</button><button disabled data-comparison="after" aria-pressed="false">後</button></div><output id="comparison-label"></output><button id="journey-play" disabled aria-label="履歴を再生" aria-pressed="false">▷</button></div>
+</header>
+<section class="surface" aria-label="System Strata・システムの地図">
+<canvas id="project-map" tabindex="0" aria-label="System Strata。ドラッグで移動、ピンチまたは＋−キーで拡大縮小。2本指でも移動と拡大縮小。版は左右の矢印で変更します。"></canvas>
+<small id="snapshot" hidden></small>
+<div id="loading" role="status"><img src="/brand/xozu-symbol-black.svg" width="56" height="56" alt=""><p id="loading-text">読込中…</p><button id="retry" hidden>再読込</button><a id="open-saved-maps" href="/map" hidden>保存版</a></div>
+<div id="place-tooltip" role="tooltip" hidden></div>
+<div id="map-bottom" class="map-bottom"><nav id="breadcrumbs" aria-label="地図の現在地"></nav><output id="scale">1.0×</output></div>
+</section>
+<button id="previous" class="era-arrow previous" aria-label="前のPRへ" disabled><span aria-hidden="true">‹</span></button><button id="next" class="era-arrow next" aria-label="次のPRへ" disabled><span aria-hidden="true">›</span></button>
+
+<aside id="record-sheet" data-snap="peek" aria-label="この版のIssueと設計記録">
+<div id="sheet-top"><button id="sheet-handle" aria-expanded="false" aria-controls="sheet-body" aria-label="記録を引き上げる"><span></span><span id="frame-count"></span></button>
+<div class="record-revision" id="record-revision"></div><div class="issue-heading"><button id="return-issue" aria-label="Issueに戻る" hidden>‹</button><span id="context-label" class="record-label">Issue</span><span id="issue-number">—</span><span id="frame-date"></span></div>
+<button id="issue-summary" disabled class="issue-summary" aria-label="Issueの要約と原文"><span id="issue-summary-text">読み込み中…</span><span class="open-original"><b>↗</b></span></button>
+<div id="document-shortcuts" class="document-shortcuts"><button id="sdd-tab" disabled aria-controls="sheet-body"><span>SDD</span><span id="sdd-status">未取得</span><b>›</b></button><button id="adr-tab" disabled aria-controls="sheet-body"><span>ADR</span><span id="adr-status">未取得</span><b>›</b></button></div>
+</div><div id="sheet-body" inert tabindex="0"><div class="sheet-body-heading"><h1 id="panel-title">この版の記録</h1><button id="collapse-sheet" aria-label="記録を小さくする">⌄</button></div><div id="panel-content"></div><p id="data-scope" class="coverage"></p></div>
+</aside>
+<p id="notice" class="notice" role="status" hidden></p></main>
+<dialog id="source-dialog"><div class="dialog-head"><div><p class="eyebrow">原文</p><h2 id="source-title"></h2></div><button data-close="source-dialog" aria-label="原文を閉じる">×</button></div><p id="source-status" role="status"></p><pre id="source-content"></pre><button id="source-retry" hidden>原文を再取得</button></dialog>
+<dialog id="picker-dialog"><div class="dialog-head"><h2>PR</h2><button data-close="picker-dialog" aria-label="版一覧を閉じる">×</button></div><div id="milestones"></div></dialog>
+<dialog id="data-dialog"><div class="dialog-head"><h2>データ</h2><button data-close="data-dialog" aria-label="データを閉じる">×</button></div><dl id="history-data" class="data-grid"></dl><details class="view-details"><summary>ライセンス</summary><a href="https://colorbrewer2.org/" target="_blank" rel="noopener">ColorBrewer</a> · <a href="/licenses/ColorBrewer-Apache-2.0.txt" target="_blank" rel="noopener">ライセンス</a> · <a href="/licenses/README.md" target="_blank" rel="noopener">出典・変更</a></details></dialog>
+<dialog id="history-search-dialog"></dialog></body></html>

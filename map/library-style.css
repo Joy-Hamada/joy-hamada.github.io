@@ -1,0 +1,10 @@
+.library-labels{position:absolute;inset:0;z-index:1;overflow:hidden;pointer-events:none;touch-action:none}
+.library-canvas{touch-action:none;cursor:grab;background:#fffefb}
+.library-label{position:absolute;pointer-events:auto;touch-action:none;display:grid;grid-template-columns:minmax(0,1fr);justify-items:center;align-content:center;gap:2px;min-height:26px;padding:3px 8px;border:1px solid #ffffffdd;border-radius:14px;background:#ffffffec;color:#374855;box-shadow:0 3px 12px #3444550b;font:600 11px/1.35 system-ui,sans-serif;text-align:center;cursor:pointer;white-space:nowrap}
+.library-label-name{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.library-label-change{display:block;color:#766043;font:600 9px/1.2 ui-monospace,monospace;letter-spacing:.025em}
+.library-label-change[hidden]{display:none}
+.library-label[data-type=file]{padding:2px 5px;border-radius:6px;background:#ffffffdd;font-size:10px;min-height:22px}
+.library-label:hover,.library-label[data-selected=true]{background:#fff;border-color:#8ba7b1;box-shadow:0 0 0 2px #52778b16}
+.library-label:focus-visible{outline:3px solid #36586b;outline-offset:3px}
+@media(prefers-reduced-motion:no-preference){.library-label{transition:background-color .12s,border-color .12s}}
