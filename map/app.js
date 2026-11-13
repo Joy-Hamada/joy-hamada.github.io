@@ -27,6 +27,8 @@ let pinVisibility = {offscreen:0,unplaced:0};
 let recordState = { revision: null, status: 'ready' };
 let viewMode = 'library', comparisonMode = 'diff', sceneTicket = 0;
 let libraryProjection = '3D';
+let growthSelection = null;
+let growthState = null;
 let towns = new Map(), comparisons = new Map();
 let journeyTimer;
 let mapLoadStatus='loading',pendingSearchRecord=null;
@@ -87,6 +89,13 @@ function renderHeading() {
   byId('return-issue').hidden=!isPin&&!isGroup&&!isPlace;
   byId('document-shortcuts').hidden=isPin||isGroup||isPlace;
   byId('issue-summary').setAttribute('aria-label',isPin?'選択したピンの詳細':'Issueの要約と原文');
+  if(panelKind==='growth' && growthSelection?.revision===frame().revision){
+    byId('context-label').textContent=growthSelection.proof?'ADR':'記録';
+    byId('issue-number').textContent=`${growthSelection.records.length}件`;
+    byId('issue-summary-text').textContent=growthSelection.proof?'方針の置換':growthSelection.records.map(record=>record.label||record.path.split('/').at(-1)).join(' · ');
+    byId('return-issue').hidden=false;byId('document-shortcuts').hidden=true;
+    byId('issue-summary').setAttribute('aria-label','選択した記録');
+  }
   requestAnimationFrame(()=>{if(!sheetDrag)setSheet(sheetExpanded);});
 }
 function openPanel(kind) { if(mapLoadStatus!=='ready')return;if(!['pin','pins'].includes(kind)){activePin=null;pinGroup=null;scene?.setActivePins([]);} panelKind = kind;renderHeading(); renderPanel(); setSheet(true); byId('sheet-body').scrollTop = 0; }
@@ -136,11 +145,54 @@ async function loadFrameRecords() {
   if (mapLoadStatus!=='ready' || result.status === 'stale' || model !== selectedModel || frame() !== selectedFrame) return;
   if (result.status === 'ready') applyFrameRecords(selectedFrame, result.value);
   recordState = { revision: selectedFrame.revision, status: result.status };
+  scene?.refreshRecords?.();
   records = buildMobileRecords(selectedFrame); renderHeading(); renderRecordShortcuts(); renderPanel();openPendingSearchRecord();
+}
+function selectGrowthRecord(selection) {
+  if(mapLoadStatus!=='ready'||!model)return;
+  const index=model.frames.findIndex(candidate=>candidate.revision===selection.revision);
+  if(index<0)return;
+  const candidates=(selection.records||[{path:selection.path}]).filter(record=>/^docs\/(?:issues|decisions|spec-driven-dev\/(?:req|design))\/[A-Za-z0-9._-]+\.md$/.test(record.path)&&model.fileAt(record.path,index));
+  if(!candidates.length)return;
+  pendingSearchRecord=null;
+  if(index!==frameIndex){changeFrame(index);changeComparison('after');}
+  if(selection.proof||candidates.length>1){
+    growthSelection={revision:selection.revision,records:candidates,proof:selection.proof,targetPath:selection.targetPath};
+    openPanel('growth');
+  }else{
+    pendingSearchRecord={revision:selection.revision,path:candidates[0].path};
+    openPanel(candidates[0].path.startsWith('docs/decisions/')?'adr':candidates[0].path.startsWith('docs/issues/')?'issue':'sdd');
+    openPendingSearchRecord();
+  }
+}
+function renderGrowthRecords(content) {
+  byId('panel-title').textContent=growthSelection?.proof?'方針の置換':'記録';
+  if(!growthSelection||growthSelection.revision!==frame().revision)return;
+  if(renderRecordLoading(content))return;
+  const available=allFrameRecords();
+  if(growthSelection.proof){
+    const proof=growthSelection.proof, source=available.find(record=>record.path===growthSelection.records[0].path);
+    const quoted=source?.content.split(/\r?\n/)[proof.line-1];
+    if(proof.revision===frame().revision&&quoted?.includes(proof.quote)){
+      content.append(element('p','path',`${source.path}:${proof.line}`),element('blockquote','place-summary',proof.quote));
+      if(growthSelection.targetPath)content.append(element('p','coverage',`置換元 ${growthSelection.targetPath}`));
+    }else content.append(element('p','coverage','根拠未確認'));
+  }
+  for(const candidate of growthSelection.records){
+    const record=available.find(item=>item.path===candidate.path), row=element('article','record-card');
+    row.append(element('h3','',record?.label||candidate.label||candidate.path.split('/').at(-1)),element('p','path',candidate.path));
+    if(record){const button=element('button','panel-action','原文 ↗');button.addEventListener('click',()=>openOriginal(record));row.append(button);}
+    else row.append(element('p','coverage','原文未収録'));
+    content.append(row);
+  }
+}
+function allFrameRecords() {
+  const all=buildMobileRecords({...frame(),story:{...frame().story,relatedDocumentPaths:null}});
+  return ['issue','sdd','adr'].flatMap(kind=>all[kind].records);
 }
 function openPendingSearchRecord(){
  if(mapLoadStatus!=='ready'||!pendingSearchRecord||pendingSearchRecord.revision!==frame().revision||recordState.status!=='ready')return;
- const record=['issue','sdd','adr'].flatMap(kind=>records[kind].records).find(record=>record.path===pendingSearchRecord.path);pendingSearchRecord=null;
+ const record=allFrameRecords().find(record=>record.path===pendingSearchRecord.path);pendingSearchRecord=null;
  if(record)openOriginal(record);else notify('原文未収録');
 }
 function renderRecordLoading(container) {
@@ -170,6 +222,7 @@ function renderRecords(container, list) {
 function renderPanel() {
   const content = byId('panel-content'); content.replaceChildren(); if (!model || !records) return;
   byId('data-scope').textContent = '';
+  if(panelKind==='growth'){renderGrowthRecords(content);return;}
   if (panelKind === 'place') { renderPlace(content); return; }
   if(panelKind==='pin'){renderPin(content);return;}
   if(panelKind==='pins'){
@@ -275,11 +328,15 @@ function renderHistoryData() {
   const current=frame();
   const data=byId('history-data');data.replaceChildren();
   const mapDetails=usesCurrentInventory()?[['表示地図',visibleMap().id],['表現',viewMode.startsWith('library')?'1ファイル1冊 · 塔は蔵書数/種類':'現ファイル数 · 対数上限付き'],['色','所属分類'],['差分','前の表示版との2inventory比較']]:[['地図',current.mapSnapshot.mapDigest],['活動色','内容編集 0 / 2 / 8回以上'],['集計','第1親差分 · 初出除外 · 配下平均']];
+  if(viewMode==='library' && growthState?.revision===visibleMap().revision){
+    const status=recordState.status==='error'?'取得失敗':growthState.status==='not-loaded'?'原文未読込':growthState.status==='partial'?'原文一部未取得':'原文取得済み';
+    mapDetails.push(['装飾',`${growthState.total}文書 · ${growthState.ornaments}組`],['仕様の枝',`${status} · ${growthState.branches}件の照合済み宣言`],['枝の根拠','採用済みの置換宣言 · 形式外は未判定 · Gitブランチではない']);
+  }
   for(const [label,value] of [['PR',current.pr?`#${current.pr.number}`:frameIndex===0?'はじまり':'PR外のmain'],['Git',current.revision],['取得',new Date(model.fetchedAt).toLocaleString('ja-JP')],['範囲',`main · ${model.frames.length}時点`],['配色','ColorBrewer Set3'],...mapDetails])data.append(element('dt','',label),element('dd','',value));
 }
 function changeFrame(index,{save=true,automatic=false}={}) {
   if (mapLoadStatus!=='ready'||!model || !Number.isInteger(index) || index<0 || index>=model.frames.length) return;
-  if(!automatic)stopJourney();pendingSearchRecord=null;
+  if(!automatic)stopJourney();pendingSearchRecord=null;growthSelection=null;if(panelKind==='growth')panelKind='issue';
   recordLoader.cancel(); releaseFrameRecords(frame());
   frameIndex=index;activePin=null;pinGroup=null;if(['pin','pins'].includes(panelKind))panelKind='issue'; sourceReader.cancel(); activeSource=null; byId('source-dialog').close(); showPlaceHover(null);
   if(frameIndex===0)comparisonMode='after';else if(automatic)comparisonMode='diff';
@@ -314,7 +371,7 @@ async function mountScene() {
     next.setAttribute('aria-label',viewMode==='library'?'円形図書館。ドラッグで中央を周回、上下で角度、ピンチで距離を変更。矢印キーで周回、＋−キーで距離。':'システムの地図。ドラッグで移動、ピンチまたは＋−キーで拡大縮小。');
     return next;
   };
-  const options={model,initialFrameIndex:frameIndex,onSelect:id=>selectNode(id,true),onNavigate:id=>selectNode(id,true),onPinSelect:choosePin,onHover:showPlaceHover,onChange:state=>{if(ticket!==sceneTicket||mapLoadStatus!=='ready')return;if(state.pins)pinVisibility=state.pins;updateLocation(state.regionId);byId('scale').textContent=`${state.zoom.toFixed(1)}×`;},onError:()=>{if(ticket!==sceneTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}};
+  const options={model,initialFrameIndex:frameIndex,onSelect:id=>selectNode(id,true),onNavigate:id=>selectNode(id,true),onPinSelect:choosePin,onRecordSelect:selectGrowthRecord,onRecordGroup:selectGrowthRecord,onHover:showPlaceHover,onChange:state=>{if(ticket!==sceneTicket||mapLoadStatus!=='ready')return;if(state.pins)pinVisibility=state.pins;if(state.growth){const nextGrowth={...state.growth,revision:state.displayRevision,ornaments:state.ornaments,branches:state.branches};if(JSON.stringify(nextGrowth)!==JSON.stringify(growthState)){growthState=nextGrowth;renderHistoryData();}}updateLocation(state.regionId);byId('scale').textContent=`${state.zoom.toFixed(1)}×`;},onError:()=>{if(ticket!==sceneTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}};
   libraryProjection='3D';
   try { scene=createScene({...options,canvas:renewCanvas()}); }
   catch(error){
@@ -355,7 +412,7 @@ async function load() {
 }
 byId('previous').addEventListener('click',()=>changeFrame(frameIndex-1));byId('next').addEventListener('click',()=>changeFrame(frameIndex+1));
 byId('pr-chip').addEventListener('click',()=>openDialog('picker-dialog'));byId('place-chip').addEventListener('click',()=>openPanel('place'));
-byId('issue-summary').addEventListener('click',()=>{if(activePin){openPanel('pin');return;}if(panelKind==='pins'){openPanel('pins');return;}if(panelKind==='place'&&usesCurrentInventory()){openPanel('place');return;}if(records?.issue.records.length===1)openOriginal(records.issue.records[0]);else openPanel('issue');});
+byId('issue-summary').addEventListener('click',()=>{if(panelKind==='growth'){openPanel('growth');return;}if(activePin){openPanel('pin');return;}if(panelKind==='pins'){openPanel('pins');return;}if(panelKind==='place'&&usesCurrentInventory()){openPanel('place');return;}if(records?.issue.records.length===1)openOriginal(records.issue.records[0]);else openPanel('issue');});
 byId('view-chip').addEventListener('click',async()=>{if(!model)return;const ticket=loadTicket,currentModel=model;pendingSearchRecord=null;viewMode=({library:'library-flat','library-flat':'rebuild',rebuild:'strata',strata:'library'})[viewMode];activePin=null;pinGroup=null;selectedId='';panelKind='issue';byId('loading').hidden=false;byId('loading-text').textContent='読込中…';renderFrame();updateHash();showMapLoadState('loading');try{await mountScene();if(ticket!==loadTicket||model!==currentModel||mapLoadStatus==='drawing-failed')return;renderFrame();showMapLoadState('ready');void loadFrameRecords();}catch{if(ticket!==loadTicket||model!==currentModel)return;showMapLoadState('drawing-failed');byId('loading').hidden=false;byId('loading-text').textContent='地図の描画に失敗';byId('retry').hidden=false;}});
 for(const button of document.querySelectorAll('[data-comparison]'))button.addEventListener('click',()=>changeComparison(button.dataset.comparison));
 byId('return-issue').addEventListener('click',restoreIssue);
